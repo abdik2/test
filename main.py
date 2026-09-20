@@ -1,162 +1,107 @@
-import flet as ft
-import httpx
-import threading
+import os
+import logging
+from fastapi import FastAPI, HTTPException, Depends, status, Request
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, DateTime, or_, and_
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+from datetime import datetime
 
-API_URL = "https://profind-backend.onrender.com"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("profind_backend")
 
-def main(page: ft.Page):
-    page.title = "ProFind Messenger"
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-    page.theme_mode = ft.ThemeMode.DARK
-    page.window_width = 400
-    page.window_height = 700
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://profind_db_user:tWWichGQvmQJmouzxfMCmeCbxYNr2lu4@dpg-dansmln40ujc73d1ksi0-a/profind_db")
 
-    current_user = {"id": None, "username": None}
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-    # Индикатор статуса сервера
-    server_status_badge = ft.Container(
-        content=ft.Row([
-            ft.ProgressRing(width=12, height=12, stroke_width=2),
-            ft.Text("Проверяем сервер...", size=12, color=ft.colors.YELLOW_400)
-        ], alignment=ft.MainAxisAlignment.CENTER, spacing=8),
-        padding=8,
-        bgcolor=ft.colors.GREY_900,
-        border_radius=8,
-        width=300
-    )
+class UserDB(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    password = Column(String, nullable=False)
 
-    username_input = ft.TextField(label="Имя пользователя", width=280, border_radius=10)
-    password_input = ft.TextField(label="Пароль", password=True, can_reveal_password=True, width=280, border_radius=10)
-    status_text = ft.Text(value="", color=ft.colors.RED_400)
+class MessageDB(Base):
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    text = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
 
-    chat_list = ft.ListView(expand=True, spacing=10, auto_scroll=True)
-    message_input = ft.TextField(label="Введите сообщение...", expand=True, border_radius=10)
+Base.metadata.create_all(bind=engine)
 
-    def check_server():
-        try:
-            res = httpx.get(f"{API_URL}/health", timeout=15.0)
-            if res.status_code == 200:
-                server_status_badge.content = ft.Row([
-                    ft.Container(width=10, height=10, border_radius=5, bgcolor=ft.colors.GREEN_400),
-                    ft.Text("Сервер Онлайн", size=12, color=ft.colors.GREEN_400)
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=8)
-            else:
-                raise Exception()
-        except:
-            server_status_badge.content = ft.Row([
-                ft.Container(width=10, height=10, border_radius=5, bgcolor=ft.colors.RED_400),
-                ft.Text("Сервер спит или недоступен", size=12, color=ft.colors.RED_400)
-            ], alignment=ft.MainAxisAlignment.CENTER, spacing=8)
-        page.update()
+app = FastAPI(title="ProFind Backend")
 
-    threading.Thread(target=check_server, daemon=True).start()
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "message": "Server is alive"}
 
-    def load_messages():
-        chat_list.controls.clear()
-        try:
-            res = httpx.get(f"{API_URL}/messages/{current_user['id']}", timeout=5.0)
-            if res.status_code == 200:
-                for msg in res.json():
-                    is_me = msg["sender_id"] == current_user["id"]
-                    align = ft.MainAxisAlignment.END if is_me else ft.MainAxisAlignment.START
-                    bg_color = ft.colors.BLUE_900 if is_me else ft.colors.GREY_800
-                    
-                    chat_list.controls.append(
-                        ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Text(msg["text"], color=ft.colors.WHITE),
-                                    padding=10,
-                                    border_radius=10,
-                                    bgcolor=bg_color,
-                                    max_width=250
-                                )
-                            ],
-                            alignment=align
-                        )
-                    )
-                page.update()
-        except Exception as e:
-            print("Ошибка загрузки сообщений:", e)
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-    def send_click(e):
-        if not message_input.value.strip():
-            return
-        try:
-            res = httpx.post(
-                f"{API_URL}/messages",
-                json={"sender_id": current_user["id"], "receiver_id": current_user["id"], "text": message_input.value},
-                timeout=5.0
-            )
-            if res.status_code == 200:
-                message_input.value = ""
-                load_messages()
-        except Exception as e:
-            print("Ошибка отправки:", e)
+class MessageCreate(BaseModel):
+    sender_id: int
+    receiver_id: int
+    text: str
 
-    def show_chat():
-        page.clean()
-        # Исправлено: AppBar задается через page.appbar, а не через page.add
-        page.appbar = ft.AppBar(
-            title=ft.Text(f"Чат: {current_user['username']}"),
-            bgcolor=ft.colors.SURFACE_VARIANT
+@app.post("/register")
+def register(username: str, password: str, db: Session = Depends(get_db)):
+    if not username or not username.strip() or not password:
+        raise HTTPException(status_code=400, detail="Заполните все поля")
+    existing = db.query(UserDB).filter(UserDB.username == username.strip()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Имя пользователя уже занято")
+    new_user = UserDB(username=username.strip(), password=password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"id": new_user.id, "username": new_user.username}
+
+@app.post("/login")
+def login(username: str, password: str, db: Session = Depends(get_db)):
+    user = db.query(UserDB).filter(UserDB.username == username.strip(), UserDB.password == password).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    return {"id": user.id, "username": user.username}
+
+@app.get("/users/{username}")
+def get_user(username: str, db: Session = Depends(get_db)):
+    user = db.query(UserDB).filter(UserDB.username == username.strip()).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return {"id": user.id, "username": user.username}
+
+@app.post("/messages")
+def send_message(msg: MessageCreate, db: Session = Depends(get_db)):
+    new_msg = MessageDB(sender_id=msg.sender_id, receiver_id=msg.receiver_id, text=msg.text)
+    db.add(new_msg)
+    db.commit()
+    db.refresh(new_msg)
+    return {"status": "ok", "message_id": new_msg.id}
+
+# Личные сообщения между двумя пользователями
+@app.get("/messages/{user_id}/{other_user_id}")
+def get_direct_messages(user_id: int, other_user_id: int, db: Session = Depends(get_db)):
+    messages = db.query(MessageDB).filter(
+        or_(
+            and_(MessageDB.sender_id == user_id, MessageDB.receiver_id == other_user_id),
+            and_(MessageDB.sender_id == other_user_id, MessageDB.receiver_id == user_id)
         )
-        page.vertical_alignment = ft.MainAxisAlignment.START
-        page.add(
-            ft.Column([
-                ft.Container(content=chat_list, expand=True, padding=10),
-                ft.Row([
-                    message_input,
-                    ft.IconButton(icon=ft.icons.SEND, on_click=send_click, icon_color=ft.colors.BLUE_400)
-                ], padding=10)
-            ], expand=True)
-        )
-        load_messages()
-
-    def handle_login(e):
-        try:
-            res = httpx.post(f"{API_URL}/login", params={"username": username_input.value, "password": password_input.value}, timeout=5.0)
-            if res.status_code == 200:
-                data = res.json()
-                current_user["id"] = data["id"]
-                current_user["username"] = data["username"]
-                show_chat()
-            else:
-                status_text.value = res.json().get("detail", "Ошибка входа")
-                page.update()
-        except Exception as ex:
-            status_text.value = "Нет связи с сервером"
-            page.update()
-
-    def handle_register(e):
-        try:
-            res = httpx.post(f"{API_URL}/register", params={"username": username_input.value, "password": password_input.value}, timeout=5.0)
-            if res.status_code == 200:
-                status_text.value = "Успешно! Теперь войдите."
-                status_text.color = ft.colors.GREEN_400
-                page.update()
-            else:
-                status_text.value = res.json().get("detail", "Ошибка регистрации")
-                page.update()
-        except Exception as ex:
-            status_text.value = "Нет связи с сервером"
-            page.update()
-
-    page.add(
-        ft.Column([
-            ft.Text("ProFind Messenger", size=24, weight=ft.FontWeight.BOLD),
-            server_status_badge,
-            ft.Container(height=10),
-            username_input,
-            password_input,
-            status_text,
-            ft.Row([
-                ft.ElevatedButton("Войти", on_click=handle_login, bgcolor=ft.colors.BLUE, color=ft.colors.WHITE),
-                ft.OutlinedButton("Регистрация", on_click=handle_register)
-            ], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
-        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-    )
-
-if __name__ == "__main__":
-    ft.app(target=main)
+    ).order_by(MessageDB.timestamp.asc()).all()
+    
+    return [
+        {
+            "id": m.id,
+            "sender_id": m.sender_id,
+            "receiver_id": m.receiver_id,
+            "text": m.text,
+            "timestamp": m.timestamp.isoformat()
+        }
+        for m in messages
+    ]
