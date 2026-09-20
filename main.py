@@ -14,7 +14,7 @@ def main(page: ft.Page):
 
     current_user = {"id": None, "username": None}
 
-    # Индикатор статуса сервера в реальном времени
+    # Индикатор статуса сервера
     server_status_badge = ft.Container(
         content=ft.Row([
             ft.ProgressRing(width=12, height=12, stroke_width=2),
@@ -33,7 +33,6 @@ def main(page: ft.Page):
     chat_list = ft.ListView(expand=True, spacing=10, auto_scroll=True)
     message_input = ft.TextField(label="Введите сообщение...", expand=True, border_radius=10)
 
-    # Фоновая проверка сервера, чтобы приложение не зависало
     def check_server():
         try:
             res = httpx.get(f"{API_URL}/health", timeout=15.0)
@@ -98,10 +97,20 @@ def main(page: ft.Page):
 
     def show_chat():
         page.clean()
+        # Исправлено: AppBar задается через page.appbar, а не через page.add
+        page.appbar = ft.AppBar(
+            title=ft.Text(f"Чат: {current_user['username']}"),
+            bgcolor=ft.colors.SURFACE_VARIANT
+        )
+        page.vertical_alignment = ft.MainAxisAlignment.START
         page.add(
-            ft.AppBar(title=ft.Text(f"Чат: {current_user['username']}"), bgcolor=ft.colors.SURFACE_VARIANT),
-            ft.Container(content=chat_list, expand=True, padding=10),
-            ft.Row([message_input, ft.IconButton(icon=ft.icons.SEND, on_click=send_click, icon_color=ft.colors.BLUE_400)], padding=10)
+            ft.Column([
+                ft.Container(content=chat_list, expand=True, padding=10),
+                ft.Row([
+                    message_input,
+                    ft.IconButton(icon=ft.icons.SEND, on_click=send_click, icon_color=ft.colors.BLUE_400)
+                ], padding=10)
+            ], expand=True)
         )
         load_messages()
 
