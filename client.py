@@ -14,7 +14,7 @@ def main(page: ft.Page):
 
     current_user = {"id": None, "username": None}
 
-    # Индикатор статуса сервера в реальном времени
+    # Индикатор статуса сервера
     server_status_badge = ft.Container(
         content=ft.Row([
             ft.ProgressRing(width=12, height=12, stroke_width=2),
@@ -33,14 +33,14 @@ def main(page: ft.Page):
     chat_list = ft.ListView(expand=True, spacing=10, auto_scroll=True)
     message_input = ft.TextField(label="Введите сообщение...", expand=True, border_radius=10)
 
-    # Фоновая проверка сервера, чтобы приложение не зависало
+    # Проверка сервера в фоне, чтобы не зависало приложение
     def check_server():
         try:
             res = httpx.get(f"{API_URL}/health", timeout=15.0)
             if res.status_code == 200:
                 server_status_badge.content = ft.Row([
                     ft.Container(width=10, height=10, border_radius=5, bgcolor=ft.colors.GREEN_400),
-                    ft.Text("Сервер Онлайн", size=12, color=ft.colors.GREEN_400)
+                    ft.Text("Сервер Онлайн (Render готов)", size=12, color=ft.colors.GREEN_400)
                 ], alignment=ft.MainAxisAlignment.CENTER, spacing=8)
             else:
                 raise Exception()
